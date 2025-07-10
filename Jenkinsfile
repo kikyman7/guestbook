@@ -1,50 +1,129 @@
-AKIA3TEBY2US2RLMJ7WJ
+import java.text.SimpleDateFormat
 
-k0KROliSUyeb54nDKdDSITghuPjCEwmYIyKRWXG7
+def TODAY = (new SimpleDateFormat("yyyyMMddHHmmss")).format(new Date())
 
-controller_public-ip = "43.200.152.128"
+pipeline {
+    agent any
+    environment {
+        strDockerTag = "${TODAY}_${BUILD_ID}"
+        strDockerImage ="kikyman7/cicd_guestbook:${strDockerTag}"
+    }
 
-Jenkins
-http://43.200.152.128:8080
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'master', url:'https://github.com/kikyman7/guestbook.git'
+            }
+        }
+        stage('Build') {
+            steps {
+                sh './mvnw clean package'
+            }
+        }
+        stage('Unit Test') {
+            steps {
+                sh './mvnw test'
+            }
+            
+            post {
+                always {
+                    junit '**/target/surefire-reports/TEST-*.xml'
+                }
+            }
+        }
 
-parse_git_branch() {
-	git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ (\1)/'
+        stage('SonarQube Analysis') {
+            steps{
+                echo 'SonarQube Analysis'
+                /*
+                withSonarQubeEnv('SonarQube-Server'){
+                    sh '''
+                        ./mvnw sonar:sonar \
+                        -Dsonar.projectKey=guestbook \
+                        -Dsonar.host.url=http://192.168.56.143:9000 \
+                        -Dsonar.login=21193ff67973f0efc068ac33ce547e3da8c671b7
+                    '''
+                }
+                */
+            }
+        }
+        stage('SonarQube Quality Gate'){
+            steps{
+                echo 'SonarQube Quality Gate'
+                /*
+                timeout(time: 1, unit: 'MINUTES') {
+                    script{
+                        def qg = waitForQualityGate()
+                        if(qg.status != 'OK') {
+                            echo "NOT OK Status: ${qg.status}"
+                            error "Pipeline aborted due to quality gate failure: ${qg.status}"
+                        } else{
+                            echo "OK Status: ${qg.status}"
+                        }
+                    }
+                }
+                */
+            }
+        }
+        stage('Docker Image Build') {
+            steps {
+                script {
+                    //oDockImage = docker.build(strDockerImage)
+                    oDockImage = docker.build(strDockerImage, "--build-arg VERSION=${strDockerTag} -f Dockerfile .")
+                }
+            }
+        }
+        stage('Docker Image Push') {
+            steps {
+                script {
+                    docker.withRegistry('', 'DockerHub_Credential') {
+                        oDockImage.push()
+                    }
+                }
+            }
+        }
+        stage('Staging Deploy') {
+            steps {
+                sshagent(credentials: ['Staging-PrivateKey']) {
+                    sh "ssh -o StrictHostKeyChecking=no root@172.31.0.110 docker container rm -f guestbookapp"
+                    sh "ssh -o StrictHostKeyChecking=no root@172.31.0.110 docker container run \
+                                        -d \
+                                        -p 38080:80 \
+                                        --name=guestbookapp \
+                                        -e MYSQL_IP=172.31.0.100 \
+                                        -e MYSQL_PORT=3306 \
+                                        -e MYSQL_DATABASE=guestbook \
+                                        -e MYSQL_USER=root \
+                                        -e MYSQL_PASSWORD=education \
+                                        ${strDockerImage} "
+                }
+            }
+        }
+        stage ('JMeter LoadTest') {
+            steps { 
+                sh '~/lab/sw/jmeter/bin/jmeter.sh -j jmeter.save.saveservice.output_format=xml -n -t src/main/jmx/guestbook_loadtest.jmx -l loadtest_result.jtl' 
+                perfReport filterRegex: '', showTrendGraphs: true, sourceDataFiles: 'loadtest_result.jtl' 
+            } 
+        }
+    }
+    post { 
+        always { 
+            emailext (attachLog: true, body: '본문', compressLog: true
+                    , recipientProviders: [buildUser()], subject: '제목', to: 'kikyman7.j@gmail.com')
+
+        }
+        success { 
+            slackSend(tokenCredentialId: 'slack-token'
+                , channel: '#교육'
+                , color: 'good'
+                , message: "${JOB_NAME} (${BUILD_NUMBER}) 빌드가 성공적으로 끝났습니다. Details: (<${BUILD_URL} | here >)")
+        }
+        failure { 
+            slackSend(tokenCredentialId: 'slack-token'
+                , channel: '#교육'
+                , color: 'danger'
+                , message: "${JOB_NAME} (${BUILD_NUMBER}) 빌드가 실패하였습니다. Details: (<${BUILD_URL} | here >)")
+    }
+  }
 }
-export PS1="[\u@\h \[\033[32m\]\W\[\033[33m\]\$(parse_git_branch)\[\033[00m\]]# "
-
-gitHub Token
-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
-
-git remote add origin https://github.com/kikyman7/guestbook.git
-
-sonarqube
-http://13.125.112.6:9000
-
-guestbook-token: b01612acf7c6eec671e973bd46daac6543f35a3e
-
-http://43.200.152.128:8080/sonarqube-webhook/
-
-mvn sonar:sonar \
-  -Dsonar.projectKey=guestbook \
-  -Dsonar.host.url=http://13.125.112.6:9000 \
-  -Dsonar.login=b01612acf7c6eec671e973bd46daac6543f35a3e
-  
-stage
-http://43.201.112.171:38080
-
-# index.html 수정
-cd ~/lab/projects/guestbook
-vi src/main/resources/templates/index.html
-
-git add .
-git commit -m "[UPDATE] index.html"
-
-git push origin master
-
-# jmeter 스크립트 형상관리
-cp /root/lab/sw/guestbook_loadtest.jmx /root/lab/projects/guestbook/src/main/jmx/guestbook_loadtest.jmx
-cd ~/lab/projects/guestbook
-git add .
-git commit -m "[ADD] LOAD TEST"
-git push origin master
 
